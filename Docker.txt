@@ -1,0 +1,763 @@
+Learning Docker
+docker login <registryurl> -u <username> -p <pass>
+
+IMAGE
+# with a Docker file in same location, build an image, . says all, saurabhtalreja/abc:xyz is user/repo:image
+docker image build -t saurabhtalreja/abc:xyz -f <filename>.
+# Pushing to registry with repo saurabhtalreja/abc and image tag xyz
+docker image push saurabhtalreja/abc:xyz
+# Lists all the images in local
+docker image ls
+# Removes local image
+docker image rm saurabhtalreja/abc:xyz
+# remove all dangling image, which doesnt have tag
+docker image prune
+# remove stopped container
+docker system prune -a
+
+CONTAINER
+# Runs in local, will see if image in local otherwise fetches from registry, -d detached terminal, --name of container, -p port forwarding any traffic on container from 8000 will be forwarded to 8080, -v volume on host where logs will be, like if contianer dies. you can always have it in host machine.
+docker container run -d --name pop -v $(pwd):/var/www/logs -p 8000:8080 saurabhtalreja/abc:xyz
+# Define env variable to be used by container
+docker container run -p 80:80 --env NODE_ENV=dev <image>
+# Start/Stop container
+docker container stop/start pop
+# Remove docker container 
+docker container rm pop 
+# Interactive Mode, sh is the main process, alpine:latest will come from registry, sh will take you to shell cmd, now if you do exit it'll throw you out and kill container, if you wanna gracefully exit without killing do ctrl+P+Q
+docker container run -it --name cop alpine sh
+
+docker logs <containerid>
+
+VOLUME
+# use bind mounts ie path from the host, here it'll live reload anything changed on host source code into the container.
+docker run -it -p 3000:3000 --volume ${pwd}:/app abc:1.0 nodemon src/index.js 
+
+Default user in container is always root. In Dockerfile add user:
+RUN groupadd -r --gid $GID\
+&& useradd -r --uid $UID -g user user
+# Value known at build time, reqd for builds, not passed in image
+docker build --build-arg UID=1001 --build-arg GID=1001 it myapp:1.0 .
+
+DOCKER SWARM
+# Swarm --> Cluster of secured manager & worker node, have always odd number of manager--> also unlocks docker microservices
+# Initializes swarm and gives join token to connect other managers
+docker swarm init
+## docker swarm join --token SWMTKN-1-0tjwvts7ax06ehy1tkdri4c2qligce8qhpz054diup0kuttjg5-0idvcvamtrhvyyy7cviasv3la 192.168.65.3:2377
+
+# docker swarm manager
+docker swarm join-token manager
+
+# docker swarm worker
+docker swarm join-token worker
+
+# Lists managers & a leader within them
+docker node ls
+
+DOCKER SERVICE
+# Create docker service from image saurabhtalreja/abc:xyz and gives name poll
+docker service create --name poll -p 8080:8080 --replicas 3 saurabhtalreja/abc:xyz --> create 3 containers
+# List docker services
+docker service ls
+# docker service poll in a cluster, like with all manager and worker
+docker services ps poll
+# scaling up, if any node fails or you explicitly remove those containers, then docker will see and it'll fire it up again.
+docker service scale poll=10
+
+Use docker Stack 
+# Build Image first 
+docker build -t saurabhtalreja/abc:ppp . 
+# Push to registry, so that all node can access
+docker push saurabhtalreja/abc:ppp
+# Deploy to stack
+docker stack deploy -c docker-compose.yml <nameofapp>
+# see stacks
+docker stack ls or docker stack ps <appname>
+
+NETWORK
+# creates a network for you, drivers are bridge,host, overlay,macvalan etc. Bridge allows certain containers in network to talk to each other, at the end you give network name. there's also none, where no container can talk to each other, host -- removes isolation b/wdocker host and containers, macvalan - gives container mac address, 
+docker network create --driver bridge my_net
+# Run a db container in network
+# net is network name, name is meta, and at end you've image name
+docker run -d --net=my_net --name=mongodb mongo
+# Inspect 
+docker network inspect <name>
+
+
+COMPOSE with docker-compose.yml
+#validate docker-compose.yml
+docker compose config
+# Build the compose --> also executes docker file
+docker-compose build 
+# If you've docker-compose.yml file in source code for multi container app then all you need to do is:, it'll download image and spin up container
+docker-compose up -d
+# turn it down 
+docker-compose down
+# from runtime set APP_ENV and reference in dockerfile.
+docker-compose.yml --> dockerfile: .docker/nginx.${APP_ENV}.dockerfile-->$env:APP_ENV="production"
+#push all images to registry
+docker-compose push 
+or 
+docker-compose push nginx redis
+# only recreate the container not its dependency
+docker-compose up -d --no-deps node
+docker-compose ps
+docker-compose start <service-name>
+docker-compose stop 
+
+
+SAMPLE Compose file::
+
+version: '3.7'
+
+services:
+
+  node:
+    container_name: nodeapp
+    image: nodeapp
+    build:
+      context: .
+      dockerfile: node.dockerfile
+      args:
+        PACKAGES: "nano wget curl"
+    ports:
+      - "3000:3000"
+    networks:
+      - nodeapp-network
+    volumes:
+      - ./logs:/var/www/logs
+    environment:
+      - NODE_ENV=production
+      - APP_VERSION=1.0
+	env_file:
+	  - ./common.env
+    depends_on: 
+      - mongodb
+	deploy:
+	  replicas: 2
+	  restart_policy:
+	    condition: on-failure
+		delay: 5s
+      
+  mongodb:
+    container_name: mongodb
+    image: mongo
+    networks:
+      - nodeapp-network
+
+networks:
+  nodeapp-network:
+    driver: bridge
+	
+
+
+## If scaling then in docker-compose.yml file don't use container_name & port mapping as it'll try to allocate that to all the new containers.
+	ports	(only internal port to be given)
+		- "3000"
+
+	
+	
+LOGS
+docker-compose logs  --tail=5  --f --t <servicename>
+
+
+
+eg1. Create app with docker file, mount volume and hot reload.
+
+Dockerfile::
+
+FROM node:14-alpine
+WORKDIR /app
+# this is done in order to make use of cache as dependency dont change often rather code changes, hence copying it later
+COPY package.json yarn.lock ./
+RUN yarn install
+COPY . .
+ENTRYPOINT ["npm","run"]
+# Default set of cmds when nothing is provided
+CMD ["prod"] 
+
+docker image build -p 3000:3000 -t todo:1.0 .
+
+# Anything changed on host src & spec will be reflected in the container. Replacing default command option of prod with dev, this will be appended to the entrypoint and final will be npm run dev and this will take package.json dev script which will have nodemon runnning in it.
+docker run -it -p 3000:3000 -v ${pwd}/spec:/app/spec -v ${pwd}/src:/app/src todo:1.0 dev
+
+
+eg 2 Seperate Application Build and execiution to reduce image size. Split into multistage docker file. (Builder Pattern)
+BuildKit - maintains intelligent dependency graph
+Enable buildKit
+export DOCKER_BUILDKIT=1
+
+FROM golang:1.16 AS base
+
+FROM base AS lint
+COPY linter/golangci-lint /go/bin
+WORKDIR /app
+CMD ["golangci-lint", "run"]
+
+FROM base AS build
+WORKDIR /app
+COPY go.??? ./
+RUN go mod download
+COPY *.go ./
+RUN go build -o mini .
+
+FROM alpine:3
+COPY --from=build /app/mini /
+ENTRYPOINT ["./mini"]
+
+docker build -t mini-linter:1.0 --target lint .
+
+eg 3 build lean, when you spin with base debian image and you've to install node then you need to add cacertifictes,ngpu and other lib just to use node. so if we do apt-update it'll take and install all of them, wise way is to put it in a single RUN ie with use of & operator. Hence it'll then only install temporarily wont persist in all layers. Also use & rm at end to remove unnecessary folders.
+
+eg 4: ARG is used at build time not passed to container, whereas env is passed to container. If both share same name, env wins out
+docker run --env REDIS_HOST=redis_server <image>
+or 
+docker run --env-file ${pwd}/redis.env <image>
+
+In dockerfile give ARG NODE_ENV=production, this will impact behavior of yarn install, it won't install dev dependencies, create 2 diff images dev & prod.
+also in entrypoint create new script to see which to use.
+ARG NODE_ENV=production
+# checks if arg NODE_ENV is not there then add default production
+ENV NODE_ENV="${NODE_ENV:-production}"
+
+eg 5 Logging --> default driver is json-file, others are local,journald. they are configured in daemonjson
+# Change logging driver --> do it on daemon or for any container change in CLI
+docker info -f '{{.LoggingDriver}}'
+
+journald driver persists logs on host, even if container is destroyed. journald is used on linux systems
+
+docker run --it --name todo -p 3000:3000 --log-driver journald todo:1.1
+
+docker logs --since 5m todo
+docker logs --until 5m todo 
+docker logs -t -f todo
+
+# get fluentd image from registry and then output it, get image and then do some conf in fluentd.conf and build it in seperate container and use log driver in your app
+# {{name}} uses from name of the container,
+docker run -it --rm -p 8080:8080 --log-driver=fluentd --log-opt tag = "{{.Name}}.{{.ImageName}}" --name api my-app-log
+fluentd.conf
+<label @DATA>
+	<match *.**>
+		@type copy
+		<store>
+		@type elasticsearch
+		host elasticsearch
+		port 9200
+		logstash_format true
+
+Elastic Stack - Elastic Search, kibana, Log Collector, 
+
+version: '3.8'
+services:
+  elasticsearch:
+    image: elasticsearch:7.11.1
+    environment:
+      - "discovery.type=single-node"
+    ports:
+      - 9200:9200
+
+  kibana:
+    image: kibana:7.11.1
+    ports:
+      - 5601:5601
+
+  fluentd:
+    image: my-fluentd
+    volumes:
+      - ./:/fluentd/etc/
+    ports:
+      - 24224:24224
+      - 24224:24224/udp
+    environment:
+      - FLUENTD_CONF=fluent-efk.conf
+
+  api:
+    image: my-app-log
+    ports:
+      - 8080:8080
+    depends_on:
+      - fluentd
+    logging:
+      driver: fluentd
+      options:
+        fluentd-address: localhost:24224
+        tag: "{{.Name}}.{{.ImageName}}"
+
+
+eg 6 debug in VS Code
+In dockerfile cmd add param debug
+In package.json add script debug with inspect switch, this listens on all and on port 9229
+node --inspect=0.0.0.0:9229 index.js (default debug port is 127.0.0.1, but since we're exposing docker outside env, we do 0.0.0)
+
+# then add dockerfiles to workspace, this will add launch.json & tasks.json in.vscode
+# Then go to launch.json (launch the container, configure debugger to talk to contianer)
+## node:{remoteRoot:/app} //give root of file for container
+
+
+# then goto tasks.json (here it can pass args before build file is started)
+# in build provide buildArgs:{NODE_ENV:"development"}
+# in run define volumes:[{"localPath:"${workspaceFolder}/src","hostPort":3000}]
+
+#For java app
+docker-compose-debug.ymlservices:
+  web-app:
+    command: ["catalina.sh", "jpda", "run"]
+    environment:
+      - JPDA_OPTS=-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:5005
+    ports:
+      - 5005:5005
+
+settings.json
+{
+    "docker.commands.build": [
+        {
+          "label": "Default build command",
+          "template": "docker build --rm -f \"${dockerfile}\" -t ${tag} \"${context}\""
+        },
+        {
+          "label": "Maven build",
+          "template": "docker build --build-arg OUTDIR=target -f \"${dockerfile}\" -t ${tag} \"${context}\"",
+        },
+        {
+          "label": "Gradle build",
+          "template": "docker build --build-arg OUTDIR=build/libs -f \"${dockerfile}\" -t ${tag} \"${context}\"",
+        }
+      ],
+      "docker.commands.composeUp": [
+        {
+            "label": "Default composeUp command",
+            "template": "docker-compose -f ${configurationFile} up -d --build",
+        },
+        {
+            "label": "Override",
+            "template": "docker-compose -f docker-compose.yml -f ${configurationFile} up",
+        }
+      ]
+}
+
+tasks.json
+{
+    // See https://go.microsoft.com/fwlink/?LinkId=733558
+    // for the documentation about the tasks.json format
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Build my image with Maven",
+            "type": "docker-build",
+            "dockerBuild": {
+                "context": "${workspaceFolder}",
+                "dockerfile": "Dockerfile",
+                "tag": "web-app-vscode-debug",
+                "buildArgs": {
+                    "OUTDIR": "target"
+                }
+            },
+            "dependsOn": ["Build my app with Maven"]
+        },
+        {
+            "label": "Build my app with Maven",
+            "type": "shell",
+            "command": "./mvnw clean package "
+        },
+        {
+            "label": "Run with Debug",
+            "type": "docker-run",
+            "dependsOn": ["Build my image with Maven"],
+            "dockerRun": {
+                "image": "web-app-vscode-debug",
+                "command": "catalina.sh jpda run",
+                "ports": [
+                    {
+                        "containerPort": 5005,
+                        "hostPort": 5005
+                    },
+                    {
+                        "containerPort": 8080,
+                        "hostPort": 8080
+                    }
+                ],
+                "env": {
+                    "JPDA_OPTS": "-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:5005"
+                },
+                "customOptions": "-d=false"
+            },
+            "isBackground": true,
+            "problemMatcher": [{
+                "pattern": [{
+                    "regexp": "\\b\\B",
+                    "file": 1,
+                    "location": 2,
+                    "message": 3
+                }],
+                "background": {
+                    "activeOnStart": true,
+                    "beginsPattern": "^.*Listening for",
+                    "endsPattern": "^.*transport dt_socket at address.*"
+                }
+            }]
+        },
+        {
+            "label": "Run Compose with Debug",
+            "type": "shell",
+            "command": "docker-compose -f docker-compose.yml -f docker-compose-debug.yml up",
+            "isBackground": true,
+            "problemMatcher": [{
+                "pattern": [{
+                    "regexp": "\\b\\B",
+                    "file": 1,
+                    "location": 2,
+                    "message": 3
+                }],
+                "background": {
+                    "activeOnStart": true,
+                    "beginsPattern": "^.*Listening for",
+                    "endsPattern": "^.*transport dt_socket at address.*"
+                }
+            }]
+        }
+    ]
+}
+
+
+launch.json
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "java",
+            "name": "Compose Up and Attach",
+            "request": "attach",
+            "hostName": "localhost",
+            "port": 5005,
+            "preLaunchTask": "Run Compose with Debug"
+        },
+        {
+            "type": "java",
+            "name": "Build and Attach to Remote Program",
+            "request": "attach",
+            "hostName": "localhost",
+            "port": 5005,
+            "preLaunchTask": "Run with Debug"
+        },
+        
+        {
+            "type": "java",
+            "name": "Attach to Remote Program",
+            "request": "attach",
+            "hostName": "localhost",
+            "port": 5005
+        }   
+    ]
+}
+crete tasks.json & launch.json  which has dependency on tasks.json
+
+## Deploying Containerized Application
+# restarting if it fails at any time, memeory allocation of max 250MB, mounting volumes
+docker run -d --network wired-brain  --name web-test  -p 8080:80  -e Environment='TEST-2'  -v "$(pwd)/config/web/config:/app/config"  -v "$(pwd)/config/web/secrets:/app/secrets"  --restart=always  --memory=250M  psdockerrun/web
+
+
+
+## Swarm --> Cluster of Machines, docker runs on single machine. But on swarm you can control multiple machines, control plane is set of manager nodes
+#init swarm, will give token to join other machines
+docker swarm init
+# inspect a node
+docker node inspect $(docker node ls -q
+
+##The swarm commands let you retrieve the token and configure the Swarm:
+docker swarm join-token worker
+docker swarm join-token manager
+# individual service is node, collection of services are stack
+## we dont do docker compose up, rather we use stack, wb is name of stack.
+docker stack deploy -c docker-compose.yml wb
+docker stack ls
+# network will be overlay and swar
+docker network ls
+docker service ls
+docker service ps wb_products-api
+
+# logs
+docker service logs wb_web
+# remove service
+docker service rm wb_web
+## one deployed it doesnt need docker compose again as it is stored in control-plane
+# killing stack 
+docker stack rm wb
+
+#Create the application Configs:, products-api-config is name of config
+docker config create products-api-config configs/products-api/application.properties
+# Print the details and the content of the Configs:
+docker config inspect --pretty products-api-config 
+# Create the Secrets:, they're encrypted when sent from control plane to service, only applicatiom can see
+docker secret create products-api-dbconfig secrets/products-api/db.properties
+# Print the details of the database Secret:, wont be seeable
+docker secret inspect --pretty products-db-password
+# Check all the dependencies are there:
+docker config ls
+docker secret ls
+#you can mrntion config and secret in your compose, but you've to create first in cli.and they’re defined as external, so they need to exist before deployment
+#Check the service containers for the stack:
+docker stack ls
+docker stack ps wb
+#Swarm uses an ingress network which means multiple containers can listen on the same port - on one node or several nodes.
+
+#Docker Contexts let you control a remote Docker environment from your local CLI.
+#Create a context to use ACI:
+docker context ls
+docker login azure --tenant-id $tenantId
+docker context create aci azure
+
+# Switch to use the new ACI context:- ACI takes care of networks
+docker context ls
+# below command is for everytime you run terminal
+# docker context use azure
+# this will be only session specific
+$env:DOCKER_CONTEXT='azure'
+
+In aws secret gets stored at aws secret manager.
+
+
+
+###Docker with React
+# docker-compose.yml, for service of UI add, start react in interactive mode
+stdin_open:true
+# in package.json add proxy, proxy adds as gateway b/w client and server, also no need for host in code, it'lll be auto pick from proxy, just give yoru endpoiunt
+"proxy":"http://api-server:8080"
+# to do hotloading, use shared volume for main codebase
+
+## routing with nginx server, addcts as a web server and load balancer
+# create custom config file
+# overwrite default.conf, create in local then put in /etc/nginx/conf.d/default.conf
+
+default.conf file:(This will redirect traffic, nginx listen on 80 and will see the paths if it is / it'll send to ui ie 3000)
+
+upstream ui {
+	server ui:3000;
+}
+
+upstream node-app{
+	server node-app:8080;
+}
+
+server{
+	listen 80;
+	
+	location /{
+		proxy_pass http://ui;
+	}
+	
+	location /api {
+		proxy_pass http://node-app
+	}
+	
+}
+
+# ADD  Proxy to docker-compose.yml
+
+services:
+	proxy:
+		build:
+			context: ./proxy (nginx docker file)
+		ports:
+			- 8081:80
+
+
+
+
+## In dev you run npm start, this uses a dev server, but when building production build we need web server, thats why we use nginx there, copy contents into build folder of it. SO first build your app using npm run build and copy things in nginx folder
+
+
+## JAVA 
+# choose base image good, dont go with default jdk, volume, working directory, image and then compile, kinda dockerfile to run.
+CLI - docker run -v ${PWD}:/hello -w /hello openjdk:11.0.10-buster javac Hello.java
+## creating dockerfile
+FROM openjdk:11.0.10-jre-slim
+RUN mkdir /app
+WORKDIR /app
+# will copy to working dir
+COPY api.jar app.jar 
+EXPOSE 8080
+ENTRYPOINT ["java", "-jar", "app.jar"]
+
+## build image now with above docker file
+docker build -f jar.Dockerfile -t my-api .
+
+## Web application 
+FROM tomcat:9
+COPY web.war ${CATALINA_HOME}/webapps/ROOT.war
+EXPOSE 8080
+ENTRYPOINT ["catalina.sh","run"]
+
+## MAVEN & GRADLE IMAGES
+FROM mavane:3.6.3-jdk-11-slim
+WORKDIR /app
+USER gradle
+COPY pom.xml .
+# mvn will execute dependencies and this will reexecute if anything changes
+RUN mvn dependency:go-offline
+COPY src src
+RUN mvn package
+EXPOSE 8080
+ENTRYPOINT ["java","-jar","target/api.jar"]
+
+# GRADLE, defines user and volume. so this is defined in gradle:jdk11 image itself, also while building contianer it'll has its own volume, its an ephemeral will be deleted once we remove container
+FROM gradle:jdk11
+USER gradle
+WORKDiR /app
+COPY --chown=gradle:gradle build.gradle .
+COPY --chown=gradle:gradle src src
+RUN gradle build
+EXPOSE 8080
+ENTRYPOINT ["java", "-jar", "build/libs/api.jar"]
+
+
+## if you wnat to do this volume with maven use this build command
+docker run --it --rm -v {PWD}:/app -v ${HOME}/.m2 :/root/.m2 -w /app maven:3.6.3-jdk-11-slim mvn clean package
+# similarly create for gradle, this is repitative, so lets create multi stagebuild
+
+## Multi Stage Build MAVEN
+FROM mavane:3.6.3-jdk-11-slim AS SAURABH
+WORKDIR /app
+USER gradle
+COPY pom.xml .
+# mvn will execute dependencies and this will reexecute if anything changes
+RUN mvn dependency:go-offline
+COPY src src
+RUN mvn package
+
+FROM tomcat:9
+COPY --from=SAURABH /app/target/web.war $CATALINA_HOME}/webapps/ROOT.war
+EXPOSE 8080
+ENTRYPOINT ["catalina.sh","run"]
+
+## Memory, -m in megabyte, cpushare = relative weight, cpus = numer of cpus, cpu period in ms
+
+docker run -m 300m --cpu-shares=1024 --cpus=1 --cpu-period=50000 --cpu-quota=25000 my-image
+
+
+for java 8u131 and 9
+CPU:
+--XX:ParallelGCThreads
+--XX:CICompilerCount
+Memory:
+--XX:+UnlockExperimentalVMOptions
+--XX:+UseCGroupMemoryLimitForHeap
+--XX:InitialRAMFraction
+--XX:MaxRAMFraction (default-4)
+default heap size -1/4 physical memory
+Initial heap size 1/64 of phyiscal memory
+1:100%
+2:75%
+3:50%
+4:25%
+
+Java 10 & 8u191
+Deprecated -
+--XX:InitialRAMFraction
+--XX:MaxRAMFraction
+--XX:MinRAMFraction
+Added
+--XX:InitialRAMPercentage
+--XX:MaxRAMPercentage
+--XX:MinRAMPercentage
+
+JaVA 11
+--XX:+PreferContainerQuotaForCPUCount
+Deprecated
+--XX:+UseCGroupMemoryLimitForHeap
+
+Runtime rt = Runtime.getRuntime();
+Heap Size MB - rt.totalMemory()/1024/1024
+Max size of heaz = rt.MaxMemory()/1024/1024
+Available Processors = rt.availableProcessors()
+
+Docker flags like -m and -cpus doesnt work on java8u131 normally, use --XX:+UnlockExperimentalVMOptions & --XX:+UseCGroupMemoryLimitForHeap in conjuction. Still this will give wrong cpu
+
+Rather try --cpus & -m with 8u191, it'll work properly
+
+java 11
+docker run -it --rm -m 1g --cpus=1 openjdk:11.0.10-slim java -cp java -XX:MaxRAMPercentage=70.0 Stats
+
+# fabric8 maven plugin
+<plugin>
+                <groupId>io.fabric8</groupId>
+                <artifactId>docker-maven-plugin</artifactId>
+                <version>0.35.0</version>
+
+                <executions>
+                    <execution>
+                        <id>docker:build</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>build</goal>
+                        </goals>
+                    </execution>
+                </executions>
+
+                <configuration>
+                    <verbose>true</verbose>
+                    <images>
+                        <image>
+                            <name>fabric8-dmp:v2</name>
+                            <build>
+                                <from>openjdk:11.0.10-jre-slim</from>
+                                <assembly>
+                                    <descriptorRef>artifact</descriptorRef>
+                                </assembly>
+                                <entryPoint>
+                                    <exec>
+                                        <arg>java</arg>
+                                        <arg>-jar</arg>
+                                        <arg>/maven/${project.build.finalName}.${project.packaging}</arg>
+                                    </exec>
+                                </entryPoint>
+                            </build>
+                            <run>
+                                <ports>
+                                    <port>9050:8080</port>
+                                </ports>
+                            </run>
+                        </image>
+                    </images>
+                </configuration>
+				
+				
+## GOOGLE JIB, organizes app into layyer, build image declaratively
+mvn compile jib:dockerBuild
+
+## Spring boot with Postgres
+docker run -it --rm -p 5432:5432 -e POSTGRES_PASSWORD=1234 -e POSTGRES_DB=bookdb -v ${PWD}/db:/var/lib/postgresql/data postgres
+
+## Environment, if you dont set value, it'll take frm local
+# docker file
+ENV VERSION =1 
+ENV FILE ="my file.txt"
+
+#Use  - ${VERSION} in docker file
+#In cmd specify
+docker run -e FILE="my file.txt"
+# applicaiton.properties
+server_port =8081
+
+# specify property file in docker file
+FROM ...
+ENV SPRING_PROFILES_ACTIVE=dev
+# normal docekr run and it'll take the dev profile as active one.
+# docker run -it --rm -e SPRING_PROFILES_ACTIVE=test -p 8081:8080 <image> // this will active the test application.test.properties file
+# or even use cmd to set it docker run -it --rm -p 8081:8080 <image> --spring.profiles.active=test
+# cmd are used at the end, entrypoint and cmd both can be used together, they have 2 form (Exec form [] & shell form ) entry pont and cmd are concatenated together
+
+# java system properties ie -Dserver.port shjould not be specified at end at cmdd, it shouldbe with executables. but cmd runs after entrypoint, so use env variables
+# --spring.profiles.active=test is cmd arg but -Dserver.port is sytem property and shoudl be used with java jar etc
+# here cmd and entrypoint both cant run in shell mode together, and in exec format we can substitute a value ie ${} so we're running shell mode in exec mode by appending sh -c, now  ${0} is wehre we're replacing java_opts and ${@} is to add more args 
+ENTRYPOINT ["sh","-c","java ${JAVA_OPTS} -jar app.jar ${0} ${@}]
+
+#cmd docker build, passing env java_opts to substitie and cmd args --spring.main.banner
+docker run --rm -it -e JAVA_OPTS=-Dspring.profiles.active=test -p 8082:8082 api:1.0 --spring.main.banner-mode=console
+
+
+## Debugging
+pass argument as 
+Java debug wire protocol part of java platform debugging architecture(JPDA)
